@@ -1,10 +1,8 @@
 """
 model.py
 
-Implements:
-1. ARIMA model fitting
-2. GARCH model fitting on ARIMA residuals
-3. Forecasting function that combines ARIMA mean forecast with GARCH volatility
+Implements ARIMA+GARCH with optional data rescaling to avoid arch DataScaleWarning.
+Returns 3 values: (arima_model, garch_res, scale_factor).
 
 Author: Your Name
 """
@@ -13,110 +11,126 @@ import pandas as pd
 import numpy as np
 from statsmodels.tsa.arima.model import ARIMA
 from arch import arch_model
-from typing import Tuple
+from typing import Tuple, Optional
 
 def fit_arima_garch(
-    train_returns: pd.Series, 
-    arima_order: Tuple[int,int,int] = None, 
+    train_returns: pd.Series,
+    arima_order: Tuple[int,int,int] = (1,0,1),
     garch_order: Tuple[int,int] = (1,1),
-    dist: str = 'normal'
+    dist: str = 'normal',
+    rescale_data: bool = True,
+    scale_factor: float = 1000.0
 ):
     """
-    Fits an ARIMA model to the returns, then fits a GARCH model to the ARIMA residuals.
+    Fits an ARIMA model, then a GARCH model on ARIMA residuals,
+    optionally rescaling data to avoid the arch DataScaleWarning.
 
     Parameters
     ----------
     train_returns : pd.Series
-        The log returns series used for training.
-    arima_order : Tuple[int,int,int]
-        ARIMA hyperparameters (p, d, q). If None, a default (1, 0, 1) is used.
-        Ideally, you'd use an auto-ARIMA approach or manual AIC/BIC tuning.
-    garch_order : Tuple[int,int]
-        GARCH hyperparameters (p, q). By default, GARCH(1,1).
+        Log returns for training (original scale).
+    arima_order : (p, d, q)
+        Default (1,0,1).
+    garch_order : (p, q)
+        Default (1,1).
     dist : str
-        Distribution assumption for the GARCH residuals. Options: 'normal', 't', 'skewt'.
+        Distribution for GARCH: 'normal', 't', or 'skewt'.
+    rescale_data : bool
+        If True, multiply train_returns by scale_factor prior to modeling.
+    scale_factor : float
+        How much to multiply the returns by. E.g. 1000 or 10000.
 
     Returns
     -------
-    (ARIMAResults, ARCHModelResult)
-        - Fitted ARIMA model object
-        - Fitted GARCH model results
+    (ARIMAResults, ARCHModelResult, float)
+        - arima_model : statsmodels ARIMA fit
+        - garch_res   : arch GARCH fit
+        - used_scale  : the actual scale factor used (1.0 if rescale_data=False)
 
     Examples
     --------
-    You can test a short time series manually (though recommended is a real log-return series).
     >>> import pandas as pd
-    >>> data = pd.Series([0.01, 0.02, -0.01, 0.015])
-    >>> arima_model, garch_res = fit_arima_garch(data, (1,0,1), (1,1), dist='normal')
+    >>> data = pd.Series([0.001, 0.002, -0.001, 0.0005])
+    >>> arima_model, garch_res, scale_factor = fit_arima_garch(data, (1,0,1), (1,1), dist='normal')
     """
-    # If no ARIMA order is provided, we use a simple default
-    if arima_order is None:
-        arima_order = (1, 0, 1)
+    # Decide whether to scale
+    used_scale = 1.0
+    if rescale_data:
+        used_scale = scale_factor
+        train_returns = train_returns * used_scale
 
-    # 1) Fit ARIMA for the mean of log returns
+    # 1) Fit ARIMA
     arima_model = ARIMA(train_returns, order=arima_order).fit()
-    # arima_model.resid provides the residuals (errors) from the ARIMA model
+    resid = arima_model.resid
 
-    # 2) Fit GARCH model to the ARIMA residuals
-    # The arch_model requires a series; p & q are the GARCH orders
-    # dist can be 'normal', 't' (Student's t), or 'skewt'.
-    garch = arch_model(arima_model.resid, p=garch_order[0], q=garch_order[1], dist=dist)
-    garch_res = garch.fit(disp="off")  # disp="off" to suppress console output
+    # 2) Fit GARCH
+    #    We pass rescale=False so arch won't attempt automatic rescaling.
+    garch = arch_model(resid, p=garch_order[0], q=garch_order[1], dist=dist, rescale=False)
+    garch_res = garch.fit(disp="off")
 
-    return arima_model, garch_res
-
+    return arima_model, garch_res, used_scale
 
 def forecast_arima_garch(
-    arima_model, 
-    garch_model, 
-    steps: int = 30
+    arima_model,
+    garch_model,
+    steps: int = 30,
+    scale_factor: float = 1.0
 ) -> pd.DataFrame:
     """
-    Forecasts future log returns using ARIMA for the mean 
-    and GARCH for conditional volatility.
+    Forecasts future log returns using ARIMA + GARCH,
+    then unscales them if they were scaled.
 
     Parameters
     ----------
     arima_model : ARIMAResults
-        Fitted ARIMA model (statsmodels).
     garch_model : ARCHModelResult
-        Fitted GARCH model (arch library).
     steps : int
-        Number of forecast steps (e.g., 30 days).
+        Number of forecast days.
+    scale_factor : float
+        If we scaled data by e.g. 1000, we must unscale the predictions by /1000.
 
     Returns
     -------
     pd.DataFrame
-        DataFrame with the following columns:
-        - 'mean_return': forecasted mean of log returns
-        - 'volatility': forecasted volatility (std dev) from the GARCH
-        * Additional metadata could be added.
-
-    Notes
-    -----
-    - This function returns the forecasted returns and volatility. You will need
-      to convert returns to prices outside this function (by exponentiating 
-      and multiplying by the last known price, for instance).
+        Columns: ['mean_return', 'volatility']
 
     Examples
     --------
-    (see fit_arima_garch's docstring for usage)
+    (see fit_arima_garch docstring for usage)
     """
-    # Forecast the mean of the residuals (ARIMA part)
+    # 1) ARIMA forecast (in scaled space)
     arima_forecast = arima_model.get_forecast(steps=steps)
-    mean_forecast = arima_forecast.predicted_mean  # This is the ARIMA mean prediction
+    mean_forecast_scaled = arima_forecast.predicted_mean
 
-    # Forecast the volatility (GARCH part)
+    # 2) GARCH forecast (in scaled space)
     garch_forecast = garch_model.forecast(horizon=steps)
-    # garch_forecast.variance is a matrix of forecasted variances
-    # shape is typically [time, horizon], so we take the last time step ([-1]) 
-    # for each day in the horizon
-    vol_forecast_array = garch_forecast.variance.values[-1]  # last row => predicted variance
+    vol_forecast_array = garch_forecast.variance.values[-1]
+    volatility_scaled = np.sqrt(vol_forecast_array)
 
-    # Combine into a DataFrame
-    forecast_df = pd.DataFrame({
-        'mean_return': mean_forecast,
-        'volatility': np.sqrt(vol_forecast_array)
+    # 3) Unscale if needed
+    if scale_factor != 1.0:
+        mean_return = mean_forecast_scaled / scale_factor
+        volatility = volatility_scaled / scale_factor
+    else:
+        mean_return = mean_forecast_scaled
+        volatility = volatility_scaled
+
+    return pd.DataFrame({
+        'mean_return': mean_return,
+        'volatility': volatility
     })
 
-    return forecast_df
+
+if __name__ == "__main__":
+    # Minimal quick test
+    data = pd.Series([0.001, 0.002, -0.001, 0.0005, 0.002])
+    arima_model, garch_res, used_scale = fit_arima_garch(
+        data,
+        arima_order=(1,0,1),
+        garch_order=(1,1),
+        dist='normal',
+        rescale_data=True,
+        scale_factor=1000
+    )
+    fc = forecast_arima_garch(arima_model, garch_res, steps=5, scale_factor=used_scale)
+    print("Forecast DataFrame:\n", fc)

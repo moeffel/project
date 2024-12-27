@@ -18,17 +18,18 @@ def adf_test(series, significance=0.05):
     Parameters
     ----------
     series : array-like
-        The time-series data (e.g., log returns).
+        Time-series data (e.g., log returns).
     significance : float
-        Significance level for determining stationarity.
+        Significance level for concluding stationarity.
 
     Returns
     -------
     dict
-        A dictionary containing:
-        - test_statistic
-        - p_value
-        - is_stationary (bool)
+        {
+            'test_statistic': float,
+            'p_value': float,
+            'is_stationary': bool
+        }
 
     Examples
     --------
@@ -36,11 +37,9 @@ def adf_test(series, significance=0.05):
     >>> 'p_value' in result
     True
     """
-    # Run the ADF test using statsmodels
     result = adfuller(series, autolag='AIC')
     p_value = result[1]
     is_stationary = (p_value < significance)
-
     return {
         'test_statistic': result[0],
         'p_value': p_value,
@@ -52,24 +51,12 @@ def mean_absolute_error(y_true, y_pred):
     """
     Calculates the Mean Absolute Error (MAE).
 
-    MAE = average of |y_true - y_pred|
-
-    Parameters
-    ----------
-    y_true : array-like
-        Actual values.
-    y_pred : array-like
-        Model predictions.
-
-    Returns
-    -------
-    float
-        MAE value.
+    MAE = mean( abs(y_true - y_pred) )
 
     Examples
     --------
-    >>> mean_absolute_error([1.0, 2.0, 3.0], [1.1, 1.9, 3.0])
-    0.06666666666666671
+    >>> mean_absolute_error([1,2,3],[1,2,3])
+    0.0
     """
     y_true, y_pred = np.array(y_true), np.array(y_pred)
     return np.mean(np.abs(y_true - y_pred))
@@ -79,19 +66,7 @@ def mean_squared_error(y_true, y_pred):
     """
     Calculates the Mean Squared Error (MSE).
 
-    MSE = average of (y_true - y_pred)^2
-
-    Parameters
-    ----------
-    y_true : array-like
-        Actual values.
-    y_pred : array-like
-        Model predictions.
-
-    Returns
-    -------
-    float
-        MSE value.
+    MSE = mean( (y_true - y_pred)^2 )
 
     Examples
     --------
@@ -108,18 +83,6 @@ def root_mean_squared_error(y_true, y_pred):
 
     RMSE = sqrt( MSE )
 
-    Parameters
-    ----------
-    y_true : array-like
-        Actual values.
-    y_pred : array-like
-        Model predictions.
-
-    Returns
-    -------
-    float
-        RMSE value.
-
     Examples
     --------
     >>> root_mean_squared_error([1,2,3],[1,2,3])
@@ -132,19 +95,7 @@ def mean_absolute_percentage_error(y_true, y_pred):
     """
     Calculates the Mean Absolute Percentage Error (MAPE).
 
-    MAPE = average of ( |y_true - y_pred| / y_true )
-
-    Parameters
-    ----------
-    y_true : array-like
-        Actual values.
-    y_pred : array-like
-        Model predictions.
-
-    Returns
-    -------
-    float
-        MAPE value, e.g. 0.10 means 10% error.
+    MAPE = mean( abs( (y_true - y_pred) / y_true ) )
 
     Examples
     --------
@@ -153,3 +104,10 @@ def mean_absolute_percentage_error(y_true, y_pred):
     """
     y_true, y_pred = np.array(y_true), np.array(y_pred)
     return np.mean(np.abs((y_true - y_pred) / y_true))
+
+
+if __name__ == "__main__":
+    # Simple tests
+    print("ADF:", adf_test([1,2,3,4,5]))
+    print("MAE:", mean_absolute_error([1,2,3],[1,2,3]))
+    print("RMSE:", root_mean_squared_error([1,2,3],[1,2,3]))
