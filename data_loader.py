@@ -37,110 +37,71 @@ CRYPTO_SYMBOLS = {
 # ------------------------------------------------------------------------------
 # 2) FETCHING DATA FROM YAHOO FINANCE (with column-flattening)
 # ------------------------------------------------------------------------------
-def fetch_data_yahoo(coin_id: str, start: str = "2019-01-01", end: str = None) -> pd.DataFrame:
+def fetch_data_yahoo(coin_id: str, start: str = None, end: str = None) -> pd.DataFrame:
     """
     Fetch historical daily price data for a specified cryptocurrency from Yahoo Finance.
-
-    This function:
-      - Uses group_by="column" so we don't get ticker-labeled columns.
-      - If MultiIndex columns remain, we flatten them.
-      - Renames "Close" to "price" and ensures we have columns: ['date', 'price'].
-
-    Parameters
-    ----------
-    coin_id : str
-        A key identifying which crypto to fetch, e.g. 'bitcoin', 'ethereum'.
-        Must exist in the CRYPTO_SYMBOLS mapping above.
-    start : str, optional
-        Start date in 'YYYY-MM-DD' format, defaulting to '2019-01-01'.
-    end : str, optional
-        End date in 'YYYY-MM-DD', default None => today's date.
-
-    Returns
-    -------
-    pd.DataFrame
-        A DataFrame with columns ['date', 'price'] (plus any others if you want),
-        sorted ascending by 'date'.
-
-    Raises
-    ------
-    ValueError
-        If the coin_id is unknown or if no data is returned from Yahoo Finance.
-    KeyError
-        If the 'Close' column cannot be found after flattening.
-
-    Examples
-    --------
-    >>> df_test = fetch_data_yahoo('bitcoin', start='2022-01-01', end='2022-01-05')  # doctest: +SKIP
-    >>> 'date' in df_test.columns                                                    # doctest: +SKIP
-    True
-    >>> 'price' in df_test.columns                                                   # doctest: +SKIP
-    True
     """
-    # Ensure that the coin_id is known
+    # Validate coin_id
     if coin_id not in CRYPTO_SYMBOLS:
         raise ValueError(f"Unknown coin_id '{coin_id}'. Please add it to CRYPTO_SYMBOLS.")
 
-    ticker_symbol = CRYPTO_SYMBOLS[coin_id]
+    # Fixed date formatting function
+    def clean_date(date_str: str) -> str:
+        """Handles dates in both 'YYYY-MM-DD' and ISO 'YYYY-MM-DDTHH:MM:SS' formats"""
+        if date_str:
+            if 'T' in date_str:
+                return date_str.split('T')[0]
+            return date_str  # Already in correct format
+        return None
 
-    # Download data from Yahoo with group_by="column"
-    # so that we don't have ticker-labeled columns.
-    data = yf.download(ticker_symbol, start=start, end=end,
-                       progress=False, group_by="column")
+    # Clean dates
+    start_clean = clean_date(start)
+    end_clean = clean_date(end)
+    
+    ticker_symbol = CRYPTO_SYMBOLS[coin_id]
+    
+    # Single API call with cleaned dates
+    try:
+        data = yf.download(
+            ticker_symbol,
+            start=start_clean,
+            end=end_clean,
+            progress=False,
+            group_by="column"
+        )
+    except Exception as e:
+        raise ValueError(f"Failed to download data: {str(e)}")
 
     if data.empty:
         raise ValueError(
-            f"No data returned from Yahoo Finance for '{ticker_symbol}' "
-            f"in the range {start} to {end}."
+            f"No data returned for {ticker_symbol} between "
+            f"{start_clean or 'start'} and {end_clean or 'now'}"
         )
 
-    # If columns are multi-indexed, flatten them
-    # e.g. ('Close', 'BTC-USD') => 'Close_BTC-USD'
+    # Flatten multi-index columns
     if isinstance(data.columns, pd.MultiIndex):
         data.columns = [
             "_".join([str(level) for level in col if level])
             for col in data.columns.to_flat_index()
         ]
 
-    # We look for a column that starts with "Close". In many cases, after flattening,
-    # you might get "Close" or "Close_BTC-USD". Let's find that column:
+    # Find price column
     close_cols = [c for c in data.columns if c.startswith("Close")]
     if not close_cols:
-        raise KeyError(
-            f"No 'Close' column found after flattening. Columns are: {data.columns.tolist()}"
-        )
-
-    # We'll take the first such column as the "price" column
+        raise KeyError(f"No 'Close' column found. Columns: {data.columns.tolist()}")
     close_col = close_cols[0]
 
-    # We assume there's a 'Date' index or column
+    # Prepare final dataframe
     data = data.reset_index()
-
-    # Rename that index/column to 'date' if it's named 'Date'
-    # (In some environments it might already be a column named 'Date'.)
     if "Date" in data.columns:
         data.rename(columns={"Date": "date"}, inplace=True)
-    elif "index" in data.columns:
-        data.rename(columns={"index": "date"}, inplace=True)
-
-    # Now rename the close_col to "price"
     data.rename(columns={close_col: "price"}, inplace=True)
 
-    # We want a final DataFrame with at least ['date', 'price']
-    if "date" not in data.columns or "price" not in data.columns:
-        raise KeyError(
-            f"Missing required columns after rename. 'date' or 'price' not found. "
-            f"Columns are: {data.columns.tolist()}"
-        )
+    if not {"date", "price"}.issubset(data.columns):
+        missing = {"date", "price"} - set(data.columns)
+        raise KeyError(f"Missing required columns: {missing}")
 
-    # Filter to just ['date', 'price'] if you only want those
-    # or keep other columns if you want them. For now let's do just 2:
-    df = data[["date", "price"]].copy()
-
-    # Sort by date
-    df.sort_values("date", inplace=True)
-    df.reset_index(drop=True, inplace=True)
-    return df
+    return data[["date", "price"]].sort_values("date").reset_index(drop=True)
 
 # ------------------------------------------------------------------------------
 # 3) PREPROCESSING: Sorting, Dropping NA, Log-Returns

@@ -1,47 +1,27 @@
 # app.py
-# Main Dash app that ties together data loading (Yahoo Finance),
-# modeling (ARIMA-GARCH), extensive EDA visualizations, 
-# and final forecast tables.
-# Author: Your Name
-
 import dash
 from dash import dcc, html, Input, Output, State
 import plotly.graph_objs as go
 import pandas as pd
 import numpy as np
+from datetime import datetime, timedelta
 
 # Local modules
-from data_loader import (
-    fetch_data_yahoo,
-    preprocess_data,
-    train_test_split,
-    compute_descriptive_stats
-)
-# Note: fit_arima_garch now returns 3 items, including scale_factor
-from model import fit_arima_garch, forecast_arima_garch
-from utils import (
-    mean_absolute_error,
-    root_mean_squared_error,
-    mean_absolute_percentage_error,
-    adf_test
-)
-from plots import (
-    price_plot,
-    histogram_plot,
-    qq_plot,
-    acf_plot,
-    pacf_plot,
-    create_table_descriptive,
-    create_table_forecast
-)
+from data_loader import fetch_data_yahoo, preprocess_data, train_test_split, compute_descriptive_stats
+from model import fit_arima_garch, forecast_arima_garch, auto_tune_arima_garch
+from utils import (mean_absolute_error, root_mean_squared_error, 
+                  mean_absolute_percentage_error, adf_test)
+from plots import (price_plot, histogram_plot, qq_plot, 
+                  acf_plot, pacf_plot, create_table_descriptive, 
+                  create_table_forecast)
 
 external_stylesheets = ['https://codepen.io/chriddyp/pen/bWLwgP.css']
 
 app = dash.Dash(__name__, external_stylesheets=external_stylesheets)
 server = app.server
 
-# Mapping for user selection => coin_id
-cryptos = {
+# Crypto mapping
+CRYPTO_MAP = {
     'Bitcoin (BTC)': 'bitcoin',
     'Ethereum (ETH)': 'ethereum',
     'Dogecoin (DOGE)': 'dogecoin',
@@ -49,238 +29,237 @@ cryptos = {
 }
 
 app.layout = html.Div([
-    html.H1("ARIMA-GARCH Crypto Forecast Dashboard (Yahoo Finance)"),
-
-    # Coin Selection
+    html.H1("ARIMA-GARCH Crypto Forecasting Dashboard", style={'textAlign': 'center'}),
+    
+    # Controls Section
     html.Div([
-        html.Label("Select Cryptocurrency:"),
-        dcc.Dropdown(
-            id='crypto-dropdown',
-            options=[{'label': k, 'value': v} for k, v in cryptos.items()],
-            value='bitcoin',
-            multi=False,
-            clearable=False,
-            style={'width': '300px'}
-        )
-    ], style={'margin-bottom': '20px'}),
+        # New Parameter Mode Selector
+        html.Div([
+            html.Label("Parameter Mode:"),
+            dcc.RadioItems(
+                id='param-mode',
+                options=[
+                    {'label': ' Manual', 'value': 'manual'},
+                    {'label': ' Auto-Tune', 'value': 'auto'}
+                ],
+                value='manual',
+                labelStyle={'display': 'inline-block', 'marginRight': '20px'}
+            )
+        ], style={'width': '20%', 'display': 'inline-block', 'marginRight': '20px'}),
+        
+        html.Div([
+            html.Label("Select Date Range:"),
+            dcc.DatePickerRange(
+                id='date-range',
+                min_date_allowed=datetime(2015, 1, 1),
+                max_date_allowed=datetime.today(),
+                start_date=datetime(2021, 1, 1),
+                end_date=datetime.today(),
+                display_format='YYYY-MM-DD'
+            )
+        ], style={'width': '25%', 'display': 'inline-block', 'marginRight': '20px'}),
 
-    # ARIMA (p, d, q)
+        html.Div([
+            html.Label("Select Cryptocurrency:"),
+            dcc.Dropdown(
+                id='crypto-dropdown',
+                options=[{'label': k, 'value': v} for k, v in CRYPTO_MAP.items()],
+                value='bitcoin',
+                clearable=False
+            )
+        ], style={'width': '20%', 'display': 'inline-block'}),
+        
+        # Modified ARIMA/GARCH Inputs
+        html.Div([
+            html.Label("ARIMA Parameters:"),
+            html.Div([
+                dcc.Input(id='arima-p', type='number', value=1, min=0, 
+                         style={'width': '60px', 'marginRight': '10px'}),
+                dcc.Input(id='arima-d', type='number', value=0, min=0,
+                         style={'width': '60px', 'marginRight': '10px'}),
+                dcc.Input(id='arima-q', type='number', value=1, min=0,
+                         style={'width': '60px'})
+            ])
+        ], id='arima-controls', style={'width': '20%', 'display': 'inline-block', 'marginLeft': '20px'}),
+        
+        html.Div([
+            html.Label("GARCH Parameters:"),
+            html.Div([
+                dcc.Input(id='garch-p', type='number', value=1, min=0,
+                         style={'width': '60px', 'marginRight': '10px'}),
+                dcc.Input(id='garch-q', type='number', value=1, min=0,
+                         style={'width': '60px'})
+            ])
+        ], id='garch-controls', style={'width': '20%', 'display': 'inline-block', 'marginLeft': '20px'}),
+        
+        html.Div([
+            html.Label("Forecast Days:"),
+            dcc.Input(id='forecast-horizon', type='number', value=30, min=1,
+                     style={'width': '100px'})
+        ], style={'width': '15%', 'display': 'inline-block', 'marginLeft': '20px'}),
+    ], style={'padding': '20px', 'borderBottom': '1px solid #ddd'}),
+    
+    # Action Buttons
     html.Div([
-        html.Label("ARIMA (p, d, q):"),
-        dcc.Input(id='arima-p', type='number', value=1, style={'margin-right': '6px'}),
-        dcc.Input(id='arima-d', type='number', value=0, style={'margin-right': '6px'}),
-        dcc.Input(id='arima-q', type='number', value=1, style={'margin-right': '6px'}),
-    ], style={'margin-bottom': '20px'}),
-
-    # GARCH (p, q)
+        html.Button("Run Analysis", id='run-button', n_clicks=0,
+                   style={'backgroundColor': '#4CAF50', 'color': 'white', 
+                         'padding': '10px 20px', 'borderRadius': '5px'}),
+        html.Div(id='status-message', style={'color': 'red', 'marginLeft': '20px'})
+    ], style={'padding': '20px'}),
+    
+    # Main Content (unchanged)
     html.Div([
-        html.Label("GARCH (p, q):"),
-        dcc.Input(id='garch-p', type='number', value=1, style={'margin-right': '6px'}),
-        dcc.Input(id='garch-q', type='number', value=1, style={'margin-right': '6px'}),
-    ], style={'margin-bottom': '20px'}),
-
-    # Distribution
-    html.Div([
-        html.Label("Error Distribution:"),
-        dcc.Dropdown(
-            id='dist-dropdown',
-            options=[
-                {'label': 'Normal', 'value': 'normal'},
-                {'label': 'Student t', 'value': 't'},
-                {'label': 'Skewed t', 'value': 'skewt'}
-            ],
-            value='normal',
-            clearable=False,
-            style={'width': '250px'}
-        )
-    ], style={'margin-bottom': '20px'}),
-
-    # Forecast horizon
-    html.Div([
-        html.Label("Forecast Horizon (days):"),
-        dcc.Input(id='forecast-horizon', type='number', value=30, style={'margin-right': '6px'})
-    ], style={'margin-bottom': '20px'}),
-
-    # Buttons
-    html.Div([
-        html.Button("Refresh Data", id='refresh-data', n_clicks=0, style={'margin-right': '15px'}),
-        html.Button("Run Model", id='run-model', n_clicks=0, style={'margin-right': '15px'}),
-    ], style={'margin-bottom': '20px'}),
-
-    # Status
-    html.Div(id='status', style={'color': 'red', 'margin-bottom': '20px'}),
-
-    # Main Price-Forecast Plot
-    dcc.Graph(id='price-plot'),
-
-    # Additional EDA Plots
-    html.H3("Histogram of Log Returns"),
-    dcc.Graph(id='hist-plot'),
-
-    html.H3("Q-Q Plot of Log Returns"),
-    dcc.Graph(id='qq-plot'),
-
-    html.H3("ACF Plot (Log Returns)"),
-    dcc.Graph(id='acf-plot'),
-
-    html.H3("PACF Plot (Log Returns)"),
-    dcc.Graph(id='pacf-plot'),
-
-    # Descriptive Stats Table
-    html.H3("Descriptive Statistics"),
-    html.Div(id='metrics-table'),
-
-    # Forecasted Prices Table
-    html.H3("Forecasted Prices"),
-    html.Div(id='forecast-table'),
+        html.Div([
+            dcc.Graph(id='price-plot', style={'height': '400px'}),
+            html.Div([
+                html.Div([dcc.Graph(id='hist-plot')], 
+                        style={'width': '50%', 'display': 'inline-block'}),
+                html.Div([dcc.Graph(id='qq-plot')], 
+                        style={'width': '50%', 'display': 'inline-block'})
+            ]),
+            html.Div([
+                html.Div([dcc.Graph(id='acf-plot')], 
+                        style={'width': '50%', 'display': 'inline-block'}),
+                html.Div([dcc.Graph(id='pacf-plot')], 
+                        style={'width': '50%', 'display': 'inline-block'})
+            ])
+        ], style={'width': '70%', 'display': 'inline-block'}),
+        
+        html.Div([
+            html.H3("Performance Metrics"),
+            html.Div(id='stats-table', style={'marginBottom': '20px'}),
+            html.H3("Forecast Prices"),
+            html.Div(id='forecast-table')
+        ], style={'width': '28%', 'display': 'inline-block', 'verticalAlign': 'top', 
+                 'padding': '20px', 'backgroundColor': '#f9f9f9'})
+    ])
 ])
 
+# New callback to disable inputs in auto mode
 @app.callback(
-    [
-        Output('status', 'children'),
-        Output('price-plot', 'figure'),
-        Output('hist-plot', 'figure'),
-        Output('qq-plot', 'figure'),
-        Output('acf-plot', 'figure'),
-        Output('pacf-plot', 'figure'),
-        Output('metrics-table', 'children'),
-        Output('forecast-table', 'children'),
-    ],
-    [
-        Input('run-model', 'n_clicks'),
-        Input('refresh-data', 'n_clicks')
-    ],
-    [
-        State('crypto-dropdown', 'value'),
-        State('arima-p', 'value'),
-        State('arima-d', 'value'),
-        State('arima-q', 'value'),
-        State('garch-p', 'value'),
-        State('garch-q', 'value'),
-        State('dist-dropdown', 'value'),
-        State('forecast-horizon', 'value'),
-    ]
+    [Output('arima-p', 'disabled'),
+     Output('arima-d', 'disabled'),
+     Output('arima-q', 'disabled'),
+     Output('garch-p', 'disabled'),
+     Output('garch-q', 'disabled')],
+    [Input('param-mode', 'value')]
 )
-def update_forecast(run_clicks, refresh_clicks,
-                    coin_id, p, d, q, gp, gq, dist, horizon):
-    """
-    Callback that runs the entire pipeline:
-    1) Load data (Yahoo)
-    2) Preprocess (log returns)
-    3) Descriptive stats
-    4) Train/Test split
-    5) Fit ARIMA-GARCH
-    6) Forecast log returns & convert to price
-    7) Create EDA plots
-    8) Return figure & tables
-    """
+def toggle_inputs(mode):
+    disabled = mode == 'auto'
+    return [disabled, disabled, disabled, disabled, disabled]
+
+# Modified main callback
+@app.callback(
+    [Output('status-message', 'children'),
+     Output('price-plot', 'figure'),
+     Output('hist-plot', 'figure'),
+     Output('qq-plot', 'figure'),
+     Output('acf-plot', 'figure'),
+     Output('pacf-plot', 'figure'),
+     Output('stats-table', 'children'),
+     Output('forecast-table', 'children')],
+    [Input('run-button', 'n_clicks')],
+    [State('date-range', 'start_date'),
+     State('date-range', 'end_date'),
+     State('crypto-dropdown', 'value'),
+     State('param-mode', 'value'),
+     State('arima-p', 'value'),
+     State('arima-d', 'value'),
+     State('arima-q', 'value'),
+     State('garch-p', 'value'),
+     State('garch-q', 'value'),
+     State('forecast-horizon', 'value')]
+)
+def update_all_components(n_clicks, start_date, end_date, coin_id, param_mode, p, d, q, garch_p, garch_q, horizon):
+    start_date = start_date.split('T')[0] if start_date else None
+    end_date = end_date.split('T')[0] if end_date else None
+
+    ctx = dash.callback_context
+    if not ctx.triggered:
+        return dash.no_update
+    
     try:
-        # 1) Load data for the chosen coin
-        df = fetch_data_yahoo(coin_id, start="2019-01-01", end=None)
+        # 1. Data Loading & Preprocessing
+        raw_df = fetch_data_yahoo(coin_id, start=start_date, end=end_date)
+        processed_df = preprocess_data(raw_df)
+        
+        if len(processed_df) < 30:
+            raise ValueError("Insufficient data (minimum 30 days required)")
+            
+        # 2. Train-Test Split (modified for time-based split)
+        test_size = horizon
+        split_index = len(processed_df) - test_size
+        if split_index < 0:
+            raise ValueError(f"Need at least {horizon} days of historical data for forecasting")
+            
+        train_df = processed_df.iloc[:split_index]
+        test_df = processed_df.iloc[split_index:]
 
-        # 2) Preprocess
-        df = preprocess_data(df)
-        if len(df) < 10:
-            raise ValueError("Not enough data points after preprocess. Need >= 10 rows for ARIMA-GARCH demo.")
-
-        # 3) Descriptive Stats
-        stats_dict = compute_descriptive_stats(df)
-
-        # 4) Train/Test split
-        train_df, test_df = train_test_split(df, train_ratio=0.8)
-        if len(train_df) < 5:
-            raise ValueError("Training set too small after split.")
-
-        # 5) Fit ARIMA-GARCH
-        # -- FIX: Unpack 3 values instead of 2 --
-        arima_model, garch_res, used_scale = fit_arima_garch(
-            train_returns=train_df['log_return'],
-            arima_order=(p, d, q),
-            garch_order=(gp, gq),
-            dist=dist,
-            rescale_data=True,    # or False if you want
-            scale_factor=1000.0   # adjust if needed
-        )
-
-        # 6) Forecast
-        # -- FIX: pass used_scale to forecast_arima_garch --
-        forecast_df = forecast_arima_garch(
-            arima_model,
-            garch_res,
-            steps=horizon,
-            scale_factor=used_scale
-        )
-
-        # Convert log returns -> price
-        last_price = df['price'].iloc[-1]
-        cum_factor = np.exp(forecast_df['mean_return']).cumprod()
-        forecast_prices = last_price * cum_factor
-
-        # Create new date range for forecast
-        forecast_dates = pd.date_range(
-            start=df['date'].iloc[-1],
-            periods=horizon+1,
-            freq='D'
-        )[1:]
-        forecast_output_df = pd.DataFrame({
-            'date': forecast_dates,
-            'forecast_price': forecast_prices.values
-        })
-
-        # Calculate performance on test set
-        test_slice = test_df.iloc[:horizon]
-        merged = pd.merge(
-            test_slice[['date','price']],
-            forecast_output_df[['date','forecast_price']],
-            on='date', how='inner'
-        )
-        if len(merged) > 0:
-            mae_val = mean_absolute_error(merged['price'], merged['forecast_price'])
-            rmse_val = root_mean_squared_error(merged['price'], merged['forecast_price'])
-            mape_val = mean_absolute_percentage_error(merged['price'], merged['forecast_price'])
-            performance_msg = (
-                f"MAE: {mae_val:.4f}, "
-                f"RMSE: {rmse_val:.4f}, "
-                f"MAPE: {mape_val:.2%}"
-            )
+        # 3. Parameter Selection
+        if param_mode == 'auto':
+            # Auto-tuning logic
+            best_params = auto_tune_arima_garch(train_df['log_return'])
+            p, d, q = best_params.get('arima', (1,0,1))
+            garch_p, garch_q = best_params.get('garch', (1,1))
+            param_status = f"Auto-selected: ARIMA({p},{d},{q}) GARCH({garch_p},{garch_q})"
         else:
-            performance_msg = "Not enough overlap to compute metrics."
+            param_status = f"Manual: ARIMA({p},{d},{q}) GARCH({garch_p},{garch_q})"
 
-        # 7) EDA Plots
-        fig_price = price_plot(df, forecast_output_df)
-        fig_hist = histogram_plot(df)
-        fig_qq = qq_plot(df)
-        fig_acf = acf_plot(df)
-        fig_pacf = pacf_plot(df)
-
-        # Create tables
-        table_stats = create_table_descriptive(stats_dict)
-        table_forecast = create_table_forecast(forecast_output_df)
-
-        status_msg = f"Model run complete. {performance_msg}"
-
-        return (
-            status_msg,        # status
-            fig_price,         # price-plot figure
-            fig_hist,          # histogram
-            fig_qq,            # qq-plot
-            fig_acf,           # acf-plot
-            fig_pacf,          # pacf-plot
-            table_stats,       # metrics-table
-            table_forecast     # forecast-table
+        # 4. Model Fitting
+        arima_model, garch_model, scale = fit_arima_garch(
+            train_df['log_return'],
+            arima_order=(p, d, q),
+            garch_order=(garch_p, garch_q),
+            rescale_data=True
         )
-
+        
+        # 5. Forecasting (using test period dates)
+        forecast = forecast_arima_garch(arima_model, garch_model, horizon, scale)
+        forecast_dates = test_df['date'].values
+        
+        # 6. Create Forecast DataFrame
+        forecast_df = pd.DataFrame({
+            'date': forecast_dates,
+            'forecast_price': train_df['price'].iloc[-1] * np.exp(forecast['mean_return']).cumprod().values
+        })
+        
+        # 7. Calculate Metrics
+        merged = test_df.merge(forecast_df, on='date')
+        metrics = {
+            'forecast_mae': mean_absolute_error(merged['price'], merged['forecast_price']),
+            'forecast_rmse': root_mean_squared_error(merged['price'], merged['forecast_price']),
+            'forecast_mape': mean_absolute_percentage_error(merged['price'], merged['forecast_price'])
+        }
+        status = f"{param_status} | MAE: {metrics['forecast_mae']:.4f}, RMSE: {metrics['forecast_rmse']:.4f}, MAPE: {metrics['forecast_mape']:.2%}"
+        
+        # 8. Prepare Statistics
+        model_metrics = {
+            'model_aic': arima_model.aic + garch_model.aic,
+            'model_bic': arima_model.bic + garch_model.bic
+        }
+        
+        full_stats = {
+            **compute_descriptive_stats(processed_df),
+            **model_metrics,
+            **metrics
+        }
+        
+        # 9. Generate Components
+        return (
+            status,
+            price_plot(processed_df, forecast_df),
+            histogram_plot(processed_df),
+            qq_plot(processed_df),
+            acf_plot(processed_df),
+            pacf_plot(processed_df),
+            create_table_descriptive(full_stats),
+            create_table_forecast(forecast_df)
+        )
+    
+    except ValueError as ve:
+        return f"Validation Error: {str(ve)}", go.Figure(), go.Figure(), go.Figure(), go.Figure(), go.Figure(), [], []
     except Exception as e:
-        import traceback
-        error_text = f"ERROR: {e}\nTraceback:\n{traceback.format_exc()}"
-        # Return empty figs & empty tables if error
-        empty_fig = go.Figure()
-        return (
-            error_text,
-            empty_fig, empty_fig, empty_fig, empty_fig, empty_fig,
-            html.Div(),
-            html.Div()
-        )
+        return f"Unexpected Error: {str(e)}", go.Figure(), go.Figure(), go.Figure(), go.Figure(), go.Figure(), [], []
 
-if __name__ == "__main__":
-    app.run_server(debug=True)
+if __name__ == '__main__':
+    app.run_server(debug=True, dev_tools_props_check=False)
