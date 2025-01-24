@@ -2,13 +2,7 @@
 data_loader.py
 
 Handles data retrieval from Yahoo Finance, basic preprocessing
-(cleaning, log returns, splitting), and computes descriptive statistics.
-
-This module is designed so that we can fetch historical cryptocurrency prices
-beyond the 365-day limit that CoinGecko imposes for free users.
-
-Now includes logic to flatten multi-level columns from yfinance (e.g., if it 
-returns 'Close_BTC-USD' instead of just 'Close').
+(cleaning, interpolation, log returns), and optional splitting.
 
 Author: Your Name
 """
@@ -19,48 +13,36 @@ import yfinance as yf
 from datetime import datetime
 from typing import Tuple, Dict, List
 
-# ------------------------------------------------------------------------------
-# 1) MAPPING: CRYPTO_SYMBOLS
-# ------------------------------------------------------------------------------
-# You can add more cryptocurrencies as needed, linking your internal "coin_id"
-# to the appropriate Yahoo Finance ticker symbol (e.g., "BTC-USD", "ETH-USD").
+# CRYPTO_SYMBOLS for Yahoo Finance
 CRYPTO_SYMBOLS = {
     "bitcoin": "BTC-USD",
     "ethereum": "ETH-USD",
     "dogecoin": "DOGE-USD",
-    "solana": "SOL-USD",
-    # Example extension:
+    "solana":  "SOL-USD",
     # "litecoin": "LTC-USD",
-    # "ripple": "XRP-USD",
+    # "ripple":   "XRP-USD",
 }
 
-# ------------------------------------------------------------------------------
-# 2) FETCHING DATA FROM YAHOO FINANCE (with column-flattening)
-# ------------------------------------------------------------------------------
 def fetch_data_yahoo(coin_id: str, start: str = None, end: str = None) -> pd.DataFrame:
     """
     Fetch historical daily price data for a specified cryptocurrency from Yahoo Finance.
+    Flattens multi-level columns if needed (Close_BTC-USD -> price).
     """
-    # Validate coin_id
+    # Validate
     if coin_id not in CRYPTO_SYMBOLS:
         raise ValueError(f"Unknown coin_id '{coin_id}'. Please add it to CRYPTO_SYMBOLS.")
 
-    # Fixed date formatting function
     def clean_date(date_str: str) -> str:
-        """Handles dates in both 'YYYY-MM-DD' and ISO 'YYYY-MM-DDTHH:MM:SS' formats"""
         if date_str:
             if 'T' in date_str:
                 return date_str.split('T')[0]
-            return date_str  # Already in correct format
+            return date_str
         return None
 
-    # Clean dates
     start_clean = clean_date(start)
-    end_clean = clean_date(end)
-    
+    end_clean   = clean_date(end)
     ticker_symbol = CRYPTO_SYMBOLS[coin_id]
-    
-    # Single API call with cleaned dates
+
     try:
         data = yf.download(
             ticker_symbol,
@@ -70,7 +52,7 @@ def fetch_data_yahoo(coin_id: str, start: str = None, end: str = None) -> pd.Dat
             group_by="column"
         )
     except Exception as e:
-        raise ValueError(f"Failed to download data: {str(e)}")
+        raise ValueError(f"Failed to download data from yfinance: {str(e)}")
 
     if data.empty:
         raise ValueError(
@@ -78,20 +60,19 @@ def fetch_data_yahoo(coin_id: str, start: str = None, end: str = None) -> pd.Dat
             f"{start_clean or 'start'} and {end_clean or 'now'}"
         )
 
-    # Flatten multi-index columns
+    # Flatten columns (in case of multi-index)
     if isinstance(data.columns, pd.MultiIndex):
         data.columns = [
             "_".join([str(level) for level in col if level])
             for col in data.columns.to_flat_index()
         ]
 
-    # Find price column
+    # Search for a 'Close' column
     close_cols = [c for c in data.columns if c.startswith("Close")]
     if not close_cols:
-        raise KeyError(f"No 'Close' column found. Columns: {data.columns.tolist()}")
+        raise KeyError(f"No 'Close' column found in downloaded data. Columns: {data.columns.tolist()}")
     close_col = close_cols[0]
 
-    # Prepare final dataframe
     data = data.reset_index()
     if "Date" in data.columns:
         data.rename(columns={"Date": "date"}, inplace=True)
@@ -103,102 +84,45 @@ def fetch_data_yahoo(coin_id: str, start: str = None, end: str = None) -> pd.Dat
 
     return data[["date", "price"]].sort_values("date").reset_index(drop=True)
 
-# ------------------------------------------------------------------------------
-# 3) PREPROCESSING: Sorting, Dropping NA, Log-Returns
-# ------------------------------------------------------------------------------
 def preprocess_data(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Preprocess the raw price data by:
-      1. Dropping any rows with NaN in 'price'.
-      2. Calculating the log returns: log(price[t] / price[t-1]).
-      3. Dropping the row where log_return is NaN.
-      4. Resetting the index.
-
-    Parameters
-    ----------
-    df : pd.DataFrame
-        Must contain at least ['date', 'price'] columns.
-
-    Returns
-    -------
-    pd.DataFrame
-        The same data but with an additional column 'log_return'.
-
-    Raises
-    ------
-    KeyError
-        If 'date' or 'price' columns are missing.
-    ValueError
-        If data is entirely NaN.
-
-    Examples
-    --------
-    >>> import pandas as pd
-    >>> sample_df = pd.DataFrame({
-    ...     'date': pd.date_range('2023-01-01', periods=5),
-    ...     'price': [20000, 20100, None, 20500, 21000]
-    ... })
-    >>> out_df = preprocess_data(sample_df)
-    >>> 'log_return' in out_df.columns
-    True
+    Data Cleaning: 
+      1) Sort by date
+      2) Interpolate missing prices
+      3) Drop any remaining NaN in 'price'
+      4) Compute log_return = ln(price[t]/price[t-1])
+      5) Drop the first row of log_return which is NaN
+      6) Reset index
     """
-    required_cols = {'date', 'price'}
+    required_cols = {"date", "price"}
     missing = required_cols - set(df.columns)
     if missing:
         raise KeyError(f"Missing required columns: {missing}")
 
-    # Drop rows where price is NaN
-    df_cleaned = df.dropna(subset=["price"]).copy()
-    if df_cleaned.empty:
-        raise ValueError("After dropping NaN prices, no rows left.")
+    # Sort by date (if not already sorted)
+    df = df.sort_values("date", ascending=True).reset_index(drop=True)
 
-    # Compute log returns
-    df_cleaned["log_return"] = np.log(df_cleaned["price"] / df_cleaned["price"].shift(1))
+    # 1) Interpolate missing price values linearly
+    #    (You could use method='time' if 'date' is a DateTimeIndex,
+    #     or other interpolation methods as needed.)
+    df["price"] = df["price"].interpolate(method="linear", limit_direction="both")
 
-    # Drop the row with NaN in log_return (the first one)
-    df_cleaned.dropna(subset=["log_return"], inplace=True)
+    # 2) Drop any rows still having NaN after interpolation (leading/trailing NAs)
+    df.dropna(subset=["price"], inplace=True)
+    if df.empty:
+        raise ValueError("After interpolation and dropping NaNs, no rows left.")
 
-    # Reset index
-    df_cleaned.reset_index(drop=True, inplace=True)
-    return df_cleaned
+    # 3) Compute log returns
+    df["log_return"] = np.log(df["price"] / df["price"].shift(1))
 
-# ------------------------------------------------------------------------------
-# 4) TRAIN-TEST SPLIT
-# ------------------------------------------------------------------------------
+    # 4) Drop the first row with NaN in log_return
+    df.dropna(subset=["log_return"], inplace=True)
+    df.reset_index(drop=True, inplace=True)
+    return df
+
 def train_test_split(df: pd.DataFrame, train_ratio: float = 0.8) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
-    Splits a time-series DataFrame into train and test sets, based on a ratio.
-
-    Parameters
-    ----------
-    df : pd.DataFrame
-        The preprocessed data with 'price' and 'log_return'.
-    train_ratio : float, optional
-        The fraction of data for training. Default=0.8.
-
-    Returns
-    -------
-    (pd.DataFrame, pd.DataFrame)
-        train_df, test_df
-
-    Raises
-    ------
-    ValueError
-        If train_ratio is <= 0 or >= 1, or if df is too small.
-
-    Examples
-    --------
-    >>> import pandas as pd
-    >>> df_example = pd.DataFrame({
-    ...     'date': pd.date_range('2023-01-01', periods=6),
-    ...     'price': [1,2,3,4,5,6],
-    ...     'log_return': [0.0]*6
-    ... })
-    >>> train_df, test_df = train_test_split(df_example, train_ratio=0.5)
-    >>> len(train_df)
-    3
-    >>> len(test_df)
-    3
+    Splits the data into train/test sets by time index according to train_ratio.
     """
     if not 0 < train_ratio < 1:
         raise ValueError("train_ratio must be between 0 and 1.")
@@ -208,7 +132,7 @@ def train_test_split(df: pd.DataFrame, train_ratio: float = 0.8) -> Tuple[pd.Dat
 
     split_index = int(len(df) * train_ratio)
     train_df = df.iloc[:split_index].reset_index(drop=True)
-    test_df = df.iloc[split_index:].reset_index(drop=True)
+    test_df  = df.iloc[split_index:].reset_index(drop=True)
     return train_df, test_df
 
 # ------------------------------------------------------------------------------
