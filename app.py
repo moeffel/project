@@ -1,3 +1,4 @@
+
 import dash
 from dash import dcc, html, Input, Output, State, callback
 import plotly.graph_objs as go
@@ -327,6 +328,7 @@ def update_all_components(run_clicks,
             param_status = f"Manual: ARIMA({p},{d},{q}), GARCH({garch_p},{garch_q})"
 
         # 6) Model fit
+        
         try:
             arima_model, garch_model, scale = fit_arima_garch(
                 train_df['log_return'].dropna(),
@@ -338,9 +340,20 @@ def update_all_components(run_clicks,
             )
         except Exception as e:
             raise ValueError(f"Model fitting error: {e}")
-
+        
         # 7) Residual analysis
         final_resid = garch_model.std_resid
+        # Create an index that matches the length of the residuals
+        resid_index = train_df.index[-len(final_resid):]
+
+        # Ensure final_resid is a pandas Series with the correct index
+        final_resid = pd.Series(final_resid, index=resid_index)
+
+        # Add 'date' as a level in the MultiIndex
+        if 'date' in train_df.columns:
+            final_resid.index = pd.MultiIndex.from_product([train_df['date'][-len(final_resid):], ['value']], names=['date', 'dummy'])
+            final_resid.index = final_resid.index.droplevel('dummy')
+
         lb_result = ljung_box_test(final_resid)
         lb_text = (f"Ljung-Box Q p-value={lb_result['lb_pvalue']:.4f}. "
                    f"White Noise? {lb_result['is_white_noise']}\n")
@@ -348,6 +361,19 @@ def update_all_components(run_clicks,
         arch_result = arch_test(final_resid, lags=12)
         arch_text = (f"Engle's ARCH p-value={arch_result['arch_pvalue']:.4f}. "
                      f"Heteroskedastic? {arch_result['heteroskedastic']}\n")
+        
+        # Create a string to indicate whether each test passed or failed
+        adf_check = "✅" if adf_result['is_stationary'] else "❌"
+        lb_check = "✅" if lb_result['is_white_noise'] else "❌"
+        arch_check = "✅" if not arch_result['heteroskedastic'] else "❌"
+
+        # Update the diagnostics text to include the pass/fail symbols
+        diag_message = (
+            f"ADF p-value={adf_result['p_value']:.4f}. Stationary? {adf_result['is_stationary']} {adf_check}\n"
+            f"{'Differenced log_return.\\n' if differenced else ''}"
+            f"Ljung-Box Q p-value={lb_result['lb_pvalue']:.4f}. White Noise? {lb_result['is_white_noise']} {lb_check}\n"
+            f"Engle's ARCH p-value={arch_result['arch_pvalue']:.4f}. Heteroskedastic? {arch_result['heteroskedastic']} {arch_check}\n"
+        )
 
         # 8) Forecast
         forecast_out = forecast_arima_garch(arima_model, garch_model, horizon, scale)
@@ -363,6 +389,7 @@ def update_all_components(run_clicks,
             'date': forecast_dates,
             'forecast_price': reconstructed_price
         })
+
         # 9) Performance
         metrics = {}
         if forecast_mode == 'backtest' and not test_df.empty:
@@ -389,7 +416,7 @@ def update_all_components(run_clicks,
 
         # 10) Plots
         price_fig = price_plot(train_df, forecast_df, forecast_mode)
-        hist_fig = histogram_plot(processed_df)
+        hist_fig = histogram_plot(processed_df, garch_dist)
 
         # Create Q-Q plot using statsmodels
         plt.clf()
@@ -475,31 +502,12 @@ def update_all_components(run_clicks,
             title='PACF'
         )
 
-        # residual plot
-        resid_fig = go.Figure()
-        resid_fig.add_trace(go.Scatter(
-            x=np.arange(len(final_resid)),
-            y=final_resid,
-            mode='lines',
-            name='Standardized Residuals'
-        ))
-        resid_fig.update_layout(
-            title="Standardized Residuals (GARCH)",
-            xaxis_title="Index",
-            yaxis_title="Residual",
-            template="plotly_white"
-        )
+        # residual plot with red line at 0
+        resid_fig = residual_plot(final_resid)
 
         # tables
         stats_table = create_table_descriptive(stats)
         forecast_table = create_table_forecast(forecast_df)
-
-        diag_message = (
-            f"{adf_text}"
-            f"{'Differenced log_return.\n' if differenced else ''}"
-            f"{lb_text}"
-            f"{arch_text}"
-        )
 
         status_full = f"{status_msg} | {param_status} | {metric_text}"
         return (

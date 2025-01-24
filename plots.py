@@ -56,11 +56,15 @@ def price_plot(df: pd.DataFrame, forecast_df: pd.DataFrame = None, mode='backtes
     return fig
 
 # 2. Histogram Plot
-def histogram_plot(df: pd.DataFrame) -> go.Figure:
+def histogram_plot(df: pd.DataFrame, dist_type: str = 'normal') -> go.Figure:
+    """
+    Generates a Plotly histogram of log returns with a kernel density estimate (KDE) and a normal distribution overlay.
+    """
     log_returns = df['log_return'].dropna()
     mean_return = log_returns.mean()
     std_return = log_returns.std()
 
+    # Basic histogram
     fig = go.Figure()
     fig.add_trace(go.Histogram(
         x=log_returns,
@@ -69,9 +73,9 @@ def histogram_plot(df: pd.DataFrame) -> go.Figure:
         marker_color='#636EFA'
     ))
 
-    # KDE
+    # KDE using statsmodels
     kde = sm.nonparametric.KDEUnivariate(log_returns)
-    kde.fit(bw=std_return/2 if std_return > 0 else 0.001)
+    kde.fit(bw=std_return/2)
     fig.add_trace(go.Scatter(
         x=kde.support,
         y=kde.density,
@@ -82,7 +86,7 @@ def histogram_plot(df: pd.DataFrame) -> go.Figure:
 
     # Normal reference
     x_norm = np.linspace(log_returns.min(), log_returns.max(), 500)
-    y_norm = norm.pdf(x_norm, mean_return, std_return if std_return>0 else 1.0)
+    y_norm = norm.pdf(x_norm, mean_return, std_return)
     fig.add_trace(go.Scatter(
         x=x_norm,
         y=y_norm,
@@ -90,9 +94,9 @@ def histogram_plot(df: pd.DataFrame) -> go.Figure:
         name='Normal Dist',
         line=dict(color='#2CA02C', dash='dot', width=2)
     ))
-    
+
     fig.update_layout(
-        title='Return Distribution',
+        title=f'Return Distribution (Assumed: {dist_type})',
         xaxis_title='Log Returns',
         yaxis_title='Density',
         hovermode='x unified',
@@ -261,39 +265,63 @@ def create_table_forecast(forecast_df: pd.DataFrame) -> html.Table:
         html.Tbody(rows)
     ], style={'borderCollapse': 'collapse', 'width': '100%'})
 
-# 8. NEW: Residual Plot
-def residual_plot(residuals, title="Residual Plot") -> go.Figure:
+# 8. Residual Plot
+def residual_plot(residuals: pd.Series, title: str = "Standardized Residuals") -> go.Figure:
     """
-    Create a time-series line plot of residuals (e.g., standardized GARCH residuals).
+    Creates a line plot of the residuals with a horizontal line at 0.
 
     Parameters
     ----------
-    residuals : array-like
-        Residual values (1D).
+    residuals : pd.Series
+        The residuals from the model.
     title : str
-        Plot title.
+        The title of the plot.
 
     Returns
     -------
     go.Figure
     """
-    residuals = np.asarray(residuals)
-    x_vals = np.arange(len(residuals))
+    
+    # Convert numeric index to dates if possible
+    if 'date' in residuals.index.names:
+        x_values = residuals.index.get_level_values('date')
+    else:
+        x_values = np.arange(len(residuals))
 
     fig = go.Figure()
+
     fig.add_trace(go.Scatter(
-        x=x_vals,
+        x=x_values,
         y=residuals,
-        mode='lines+markers',
+        mode='lines',
         name='Residuals',
-        line=dict(color='firebrick', width=2),
-        marker=dict(size=5)
+        line=dict(color='royalblue', width=2)
     ))
+
+    # Add horizontal line at y=0
+    fig.add_shape(
+        type='line',
+        y0=0, y1=0,
+        x0=x_values.min() if isinstance(x_values, pd.DatetimeIndex) or isinstance(x_values, np.ndarray) and np.issubdtype(x_values.dtype, np.datetime64) else x_values[0],
+        x1=x_values.max() if isinstance(x_values, pd.DatetimeIndex) or isinstance(x_values, np.ndarray) and np.issubdtype(x_values.dtype, np.datetime64) else x_values[-1],
+        line=dict(color='red', width=2, dash='dash')
+    )
+
     fig.update_layout(
         title=title,
-        xaxis_title="Index (Time)",
+        xaxis_title="Date" if 'date' in residuals.index.names else "Index",
         yaxis_title="Residual",
         template="plotly_white",
-        hovermode='x'
+        hovermode='x unified',
+        title_font=dict(size=16, color='darkblue'),
+        yaxis=dict(title_font=dict(size=14), tickfont=dict(size=12)),
+        xaxis=dict(title_font=dict(size=14), tickfont=dict(size=12)),
+        legend=dict(font=dict(size=12)),
+        height=350  # Adjust the height here
     )
+    
+    # Add grid lines
+    fig.update_xaxes(showgrid=True, gridwidth=1, gridcolor='lightgrey')
+    fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor='lightgrey')
+
     return fig
