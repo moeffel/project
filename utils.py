@@ -2,7 +2,7 @@
 utils.py
 
 Provides:
-1. Descriptive statistics function (compute_descriptive_stats)
+1. Descriptive statistics
 2. Augmented Dickey-Fuller stationarity test
 3. Error metrics (MAE, MSE, RMSE, MAPE)
 4. Residual diagnostics: Ljung-Box Q-test, Engle’s ARCH test
@@ -19,81 +19,43 @@ from statsmodels.stats.diagnostic import acorr_ljungbox, het_arch
 def compute_descriptive_stats(df: pd.DataFrame) -> dict:
     """
     Computes descriptive statistics for 'price' and 'log_return'
-    columns if they exist in the DataFrame. Returns a dictionary
-    of stats like { 'price_mean', 'price_std', 'price_min', etc. }.
-
-    Parameters
-    ----------
-    df : pd.DataFrame
-        Expected columns might include ['price', 'log_return'].
-
-    Returns
-    -------
-    dict
-        e.g. {
-          'price_mean': float,
-          'price_std': float,
-          'price_min': float,
-          'price_max': float,
-          'price_skew': float,
-          'price_kurtosis': float,
-          'logret_mean': float,
-          'logret_std': float,
-          ... etc ...
-        }
+    columns if they exist in the DataFrame.
+    Returns a dictionary with keys like 'price_mean','price_std', etc.
     """
     stats_dict = {}
 
     if 'price' in df.columns:
-        ser_price = df['price'].dropna()
-        stats_dict['price_mean'] = float(ser_price.mean())
-        stats_dict['price_std'] = float(ser_price.std())
-        stats_dict['price_min'] = float(ser_price.min())
-        stats_dict['price_max'] = float(ser_price.max())
-        stats_dict['price_skew'] = float(ser_price.skew())
-        stats_dict['price_kurtosis'] = float(ser_price.kurtosis())
+        sp = df['price'].dropna()
+        stats_dict['price_mean'] = float(sp.mean())
+        stats_dict['price_std']  = float(sp.std())
+        stats_dict['price_min']  = float(sp.min())
+        stats_dict['price_max']  = float(sp.max())
+        stats_dict['price_skew'] = float(sp.skew())
+        stats_dict['price_kurtosis'] = float(sp.kurtosis())
 
     if 'log_return' in df.columns:
-        ser_lr = df['log_return'].dropna()
-        stats_dict['logret_mean'] = float(ser_lr.mean())
-        stats_dict['logret_std'] = float(ser_lr.std())
-        stats_dict['logret_min'] = float(ser_lr.min())
-        stats_dict['logret_max'] = float(ser_lr.max())
-        stats_dict['logret_skew'] = float(ser_lr.skew())
-        stats_dict['logret_kurtosis'] = float(ser_lr.kurtosis())
+        lr = df['log_return'].dropna()
+        stats_dict['logret_mean'] = float(lr.mean())
+        stats_dict['logret_std']  = float(lr.std())
+        stats_dict['logret_min']  = float(lr.min())
+        stats_dict['logret_max']  = float(lr.max())
+        stats_dict['logret_skew'] = float(lr.skew())
+        stats_dict['logret_kurtosis'] = float(lr.kurtosis())
 
     return stats_dict
 
-
 # ------------------------------------------------------------------------------
-# 2) STATIONARITY CHECK: ADF TEST
+# 2) STATIONARITY CHECK (ADF)
 # ------------------------------------------------------------------------------
 def adf_test(series, significance=0.05):
     """
-    Performs the Augmented Dickey-Fuller (ADF) test for stationarity.
-
-    Parameters
-    ----------
-    series : array-like
-        Time-series data (e.g., log returns or price).
-    significance : float
-        Significance level for concluding stationarity. Default=0.05
-
-    Returns
-    -------
-    dict
-        {
-            'test_statistic': float,
-            'p_value': float,
-            'is_stationary': bool,
-            'critical_values': dict
-        }
+    Augmented Dickey-Fuller test for stationarity.
+    Returns dict with test_statistic, p_value, is_stationary, critical_values
     """
     result = adfuller(series, autolag='AIC')
     p_value = result[1]
-    crit_values = result[4]  # dictionary of critical values
+    crit_values = result[4]
     is_stationary = bool(p_value < significance)
-
     return {
         'test_statistic': result[0],
         'p_value': p_value,
@@ -101,130 +63,101 @@ def adf_test(series, significance=0.05):
         'critical_values': crit_values
     }
 
-
 # ------------------------------------------------------------------------------
 # 3) RESIDUAL ANALYSIS & DIAGNOSTICS
 # ------------------------------------------------------------------------------
 def ljung_box_test(residuals, lags=20):
     """
-    Ljung-Box Q-test to check if residuals are white noise.
+    Ljung-Box Q-test => check if residuals are white noise.
     
-    Parameters
-    ----------
-    residuals : array-like
-    lags : int, optional
-        Number of lags to test. Default=20.
-
-    Returns
-    -------
-    dict
-        {
-          'lb_stat': float (test statistic),
-          'lb_pvalue': float,
-          'is_white_noise': bool (True if p>0.05 => fails to reject random noise)
-        }
+    We clamp lags = min(lags, len(residuals)-1).
+    Use return_df=True so statsmodels returns a DataFrame with columns
+    ['lb_stat','lb_pvalue','bp_stat','bp_pvalue'] for each tested lag.
     """
-    # acorr_ljungbox returns arrays; we take the last values for the highest lag
-    lb_results = acorr_ljungbox(residuals, lags=[lags], return_df=False)
-    lb_stat = lb_results[0][-1]   # test statistic at lag=20
-    lb_pvalue = lb_results[1][-1] # p-value
-    is_white_noise = (lb_pvalue > 0.05)
+    n = len(residuals)
+    if n < 2:
+        return {'lb_stat': np.nan, 'lb_pvalue': np.nan, 'is_white_noise': False}
+
+    # clamp the lags
+    actual_lags = min(lags, n - 1)
+    if actual_lags < 1:
+        return {'lb_stat': np.nan, 'lb_pvalue': np.nan, 'is_white_noise': False}
+
+    # run the test
+    # This returns a DataFrame with index=the lag used, columns=...
+    df_result = acorr_ljungbox(residuals, lags=[actual_lags], return_df=True)
+
+    # if empty, no result
+    if df_result.empty:
+        return {'lb_stat': np.nan, 'lb_pvalue': np.nan, 'is_white_noise': False}
+
+    # The row is at index 'actual_lags'
+    lb_stat   = df_result.loc[actual_lags, 'lb_stat']
+    lb_pvalue = df_result.loc[actual_lags, 'lb_pvalue']
+
+    is_white_noise = bool(lb_pvalue > 0.05)
     return {
-        'lb_stat': lb_stat,
-        'lb_pvalue': lb_pvalue,
+        'lb_stat': float(lb_stat),
+        'lb_pvalue': float(lb_pvalue),
         'is_white_noise': is_white_noise
     }
 
-
-def arch_test(residuals, lags=1):
+def arch_test(residuals, lags=12):
     """
     Engle's ARCH test for heteroskedasticity in residuals.
 
-    Parameters
-    ----------
-    residuals : array-like
-    lags : int, optional
-        Number of lags to test. Default=1.
-
-    Returns
-    -------
-    dict
-        {
-          'arch_stat': float (test statistic),
-          'arch_pvalue': float,
-          'heteroskedastic': bool (True if p<0.05 => there's heteroskedasticity)
-        }
+    We clamp lags = min(lags, len(residuals)-1).
+    If that becomes < 1, we return NaN results. Otherwise, we do het_arch(..., nlags=...).
     """
-    # het_arch returns (LM-test statistic, p-value, f-statistic, f p-value)
-    stat, pvalue, _, _ = het_arch(residuals, lags=lags)
+    # Convert to array if it's a list
+    residuals = np.asarray(residuals)
+    n = len(residuals)
+    if n < 2:
+        return {'arch_stat': np.nan, 'arch_pvalue': np.nan, 'heteroskedastic': False}
+
+    # clamp the lags
+    actual_lags = min(lags, n - 1)
+    if actual_lags < 1:
+        return {'arch_stat': np.nan, 'arch_pvalue': np.nan, 'heteroskedastic': False}
+
+    # run the ARCH test
+    # For older statsmodels, we must pass 'nlags=actual_lags'
+    stat, pvalue, f_stat, f_pval = het_arch(residuals, nlags=actual_lags)
     return {
-        'arch_stat': stat,
-        'arch_pvalue': pvalue,
+        'arch_stat': float(stat),
+        'arch_pvalue': float(pvalue),
         'heteroskedastic': bool(pvalue < 0.05)
     }
-
 
 # ------------------------------------------------------------------------------
 # 4) ERROR METRICS
 # ------------------------------------------------------------------------------
 def mean_absolute_error(y_true, y_pred):
-    """
-    Mean Absolute Error (MAE).
-    """
     y_true, y_pred = np.array(y_true), np.array(y_pred)
-    return np.mean(np.abs(y_true - y_pred))
-
+    return float(np.mean(np.abs(y_true - y_pred)))
 
 def mean_squared_error(y_true, y_pred):
-    """
-    Mean Squared Error (MSE).
-    """
     y_true, y_pred = np.array(y_true), np.array(y_pred)
-    return np.mean((y_true - y_pred) ** 2)
-
+    return float(np.mean((y_true - y_pred)**2))
 
 def root_mean_squared_error(y_true, y_pred):
-    """
-    Root Mean Squared Error (RMSE).
-    """
-    return np.sqrt(mean_squared_error(y_true, y_pred))
-
+    return float(np.sqrt(mean_squared_error(y_true, y_pred)))
 
 def mean_absolute_percentage_error(y_true, y_pred):
-    """
-    Mean Absolute Percentage Error (MAPE).
-    """
     y_true, y_pred = np.array(y_true), np.array(y_pred)
-    return np.mean(np.abs((y_true - y_pred) / y_true))
-
+    return float(np.mean(np.abs((y_true - y_pred) / y_true)))
 
 # ------------------------------------------------------------------------------
-# 5) OPTIONAL: DIFFERENCING IF NON-STATIONARY
+# 5) OPTIONAL: DIFFERENCING
 # ------------------------------------------------------------------------------
 def difference_series(series: pd.Series, order=1) -> pd.Series:
-    """
-    Applies simple differencing to help achieve stationarity if needed.
-
-    Parameters
-    ----------
-    series : pd.Series
-        Original time-series data.
-    order : int
-        Order of differencing. Default=1 => (y[t] - y[t-1]).
-
-    Returns
-    -------
-    pd.Series
-        Differenced series with one less data point for each differencing order.
-    """
     return series.diff(order).dropna()
-
 
 # ------------------------------------------------------------------------------
 # MODULE TEST
 # ------------------------------------------------------------------------------
 if __name__ == "__main__":
-    # Quick demonstration
+    print("=== Testing utils.py ===")
 
     # 1) ADF test
     dummy = [1, 2, 3, 4, 5]
@@ -234,7 +167,7 @@ if __name__ == "__main__":
     print("MAE:", mean_absolute_error([1,2,3],[1,2,3]))
     print("RMSE:", root_mean_squared_error([1,2,3],[1,2,3]))
 
-    # 3) Example of descriptive stats
+    # 3) Descriptive stats
     df_example = pd.DataFrame({
         'price': [100, 105, 102, 110, 108],
         'log_return': [0, 0.05, -0.028, 0.076, -0.018]
@@ -243,5 +176,5 @@ if __name__ == "__main__":
 
     # 4) Residual analysis example
     res = [0.1, -0.05, 0.02, 0.01, -0.08, 0.03, -0.02]
-    print("Ljung-Box test:", ljung_box_test(res))
-    print("Engle's ARCH test:", arch_test(res))
+    print("Ljung-Box test (default 20 lags):", ljung_box_test(res))       # clamps to 6
+    print("Engle's ARCH test (default 12 lags):", arch_test(res))         # clamps to 6

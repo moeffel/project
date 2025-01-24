@@ -1,7 +1,15 @@
 """
 plots.py
 
-Generate Plotly charts and HTML tables.
+Generate Plotly charts and HTML tables, including:
+1. price_plot
+2. histogram_plot (log returns distribution)
+3. qq_plot
+4. acf_plot
+5. pacf_plot
+6. create_table_descriptive
+7. create_table_forecast
+8. residual_plot (NEW) for visualizing model residuals
 """
 
 import plotly.graph_objs as go
@@ -53,7 +61,6 @@ def histogram_plot(df: pd.DataFrame) -> go.Figure:
     mean_return = log_returns.mean()
     std_return = log_returns.std()
 
-    # Basic histogram
     fig = go.Figure()
     fig.add_trace(go.Histogram(
         x=log_returns,
@@ -62,9 +69,9 @@ def histogram_plot(df: pd.DataFrame) -> go.Figure:
         marker_color='#636EFA'
     ))
 
-    # KDE using statsmodels
+    # KDE
     kde = sm.nonparametric.KDEUnivariate(log_returns)
-    kde.fit(bw=std_return/2)
+    kde.fit(bw=std_return/2 if std_return > 0 else 0.001)
     fig.add_trace(go.Scatter(
         x=kde.support,
         y=kde.density,
@@ -75,7 +82,7 @@ def histogram_plot(df: pd.DataFrame) -> go.Figure:
 
     # Normal reference
     x_norm = np.linspace(log_returns.min(), log_returns.max(), 500)
-    y_norm = norm.pdf(x_norm, mean_return, std_return)
+    y_norm = norm.pdf(x_norm, mean_return, std_return if std_return>0 else 1.0)
     fig.add_trace(go.Scatter(
         x=x_norm,
         y=y_norm,
@@ -97,7 +104,7 @@ def histogram_plot(df: pd.DataFrame) -> go.Figure:
 def qq_plot(df: pd.DataFrame) -> go.Figure:
     log_returns = df['log_return'].dropna()
     plt.figure(figsize=(8, 6))
-    qq = sm.qqplot(log_returns, line='45', fit=True)
+    _ = sm.qqplot(log_returns, line='45', fit=True)
     plt.title('Q-Q Plot')
     buf = io.BytesIO()
     plt.savefig(buf, format='png', bbox_inches='tight')
@@ -108,8 +115,10 @@ def qq_plot(df: pd.DataFrame) -> go.Figure:
     fig.add_layout_image(
         dict(
             source=f"data:image/png;base64,{encoded_image}",
-            x=0, y=1, xref="paper", yref="paper",
-            sizex=1, sizey=1, layer="below"
+            x=0, y=1,
+            xref="paper", yref="paper",
+            sizex=1, sizey=1,
+            layer="below"
         )
     )
     fig.update_layout(
@@ -135,8 +144,10 @@ def acf_plot(df: pd.DataFrame, lags: int = 40) -> go.Figure:
     fig.add_layout_image(
         dict(
             source=f"data:image/png;base64,{encoded_image}",
-            x=0, y=1, xref="paper", yref="paper",
-            sizex=1, sizey=1, layer="below"
+            x=0, y=1,
+            xref="paper", yref="paper",
+            sizex=1, sizey=1,
+            layer="below"
         )
     )
     fig.update_layout(
@@ -162,8 +173,10 @@ def pacf_plot(df: pd.DataFrame, lags: int = 40) -> go.Figure:
     fig.add_layout_image(
         dict(
             source=f"data:image/png;base64,{encoded_image}",
-            x=0, y=1, xref="paper", yref="paper",
-            sizex=1, sizey=1, layer="below"
+            x=0, y=1,
+            xref="paper", yref="paper",
+            sizex=1, sizey=1,
+            layer="below"
         )
     )
     fig.update_layout(
@@ -201,9 +214,18 @@ def create_table_descriptive(stats: dict) -> html.Table:
     rows = []
     for k, label in metric_config.items():
         if k in stats:
+            val = stats[k]
+            if isinstance(val, float):
+                # Large or small float formatting
+                if abs(val) < 1000:
+                    val_str = f"{val:.4f}"
+                else:
+                    val_str = f"{val:.2f}"
+            else:
+                val_str = str(val)
             rows.append(html.Tr([
                 html.Td(label, style={'fontWeight': 'bold'}),
-                html.Td(f"{stats[k]:.4f}" if abs(stats[k]) < 1000 else f"{stats[k]:.2f}")
+                html.Td(val_str)
             ]))
 
     return html.Table([
@@ -216,13 +238,13 @@ def create_table_forecast(forecast_df: pd.DataFrame) -> html.Table:
     rows = []
     prev_price = None
     for _, row in forecast_df.iterrows():
-        date_str = row['date'].strftime('%Y-%m-%d')
+        date_str = row['date'].strftime('%Y-%m-%d') if isinstance(row['date'], pd.Timestamp) else str(row['date'])
         price_str = f"${row['forecast_price']:.2f}"
         if prev_price is not None:
             change = row['forecast_price'] - prev_price
-            pct_change = change / prev_price * 100 if prev_price != 0 else 0
-            arrow = '▲' if change > 0 else ('▼' if change < 0 else '')
-            color = '#2ca02c' if change > 0 else '#d62728' if change < 0 else 'inherit'
+            pct_change = (change / prev_price)*100 if prev_price != 0 else 0
+            arrow = '▲' if change>0 else ('▼' if change<0 else '')
+            color = '#2ca02c' if change>0 else '#d62728' if change<0 else 'inherit'
             change_str = f"{arrow} {abs(pct_change):.2f}%"
         else:
             change_str = ""
@@ -235,8 +257,43 @@ def create_table_forecast(forecast_df: pd.DataFrame) -> html.Table:
         prev_price = row['forecast_price']
 
     return html.Table([
-        html.Thead(html.Tr([
-            html.Th("Date"), html.Th("Forecast"), html.Th("Change")
-        ])),
+        html.Thead(html.Tr([html.Th("Date"), html.Th("Forecast"), html.Th("Change")])),
         html.Tbody(rows)
-    ], style={'borderCollapse': 'collapse', 'width': '100%'}) 
+    ], style={'borderCollapse': 'collapse', 'width': '100%'})
+
+# 8. NEW: Residual Plot
+def residual_plot(residuals, title="Residual Plot") -> go.Figure:
+    """
+    Create a time-series line plot of residuals (e.g., standardized GARCH residuals).
+
+    Parameters
+    ----------
+    residuals : array-like
+        Residual values (1D).
+    title : str
+        Plot title.
+
+    Returns
+    -------
+    go.Figure
+    """
+    residuals = np.asarray(residuals)
+    x_vals = np.arange(len(residuals))
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=x_vals,
+        y=residuals,
+        mode='lines+markers',
+        name='Residuals',
+        line=dict(color='firebrick', width=2),
+        marker=dict(size=5)
+    ))
+    fig.update_layout(
+        title=title,
+        xaxis_title="Index (Time)",
+        yaxis_title="Residual",
+        template="plotly_white",
+        hovermode='x'
+    )
+    return fig
