@@ -1,6 +1,5 @@
 """
-```python
-crypto_forecasting_dashboard.py
+app.py
 
 A Dash-based web application for cryptocurrency price analysis and forecasting using ARIMA-GARCH models.
 
