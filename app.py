@@ -1,3 +1,75 @@
+"""
+app.py
+
+A Dash-based web application for cryptocurrency price analysis and forecasting using ARIMA-GARCH models.
+
+Features:
+1. Interactive controls for selecting cryptocurrencies, model parameters, forecast modes, and date ranges.
+2. ARIMA-GARCH model fitting with options for manual or auto-tuning of parameters.
+3. Forecasting for both backtest and future scenarios.
+4. Comprehensive diagnostic tools:
+   - ADF Test for stationarity
+   - Residual diagnostics (Ljung-Box Q-test, ARCH test)
+5. Interactive visualizations:
+   - Price trends with forecasts
+   - Histogram, Q-Q plot, ACF, PACF, and residual analysis.
+6. Performance metrics for backtesting (MAE, RMSE, MAPE).
+7. Dynamically updated tables for descriptive statistics and forecasted prices.
+
+Dependencies:
+- Dash (with `dcc`, `html`, `Input`, `Output`, `State`)
+- Plotly
+- Matplotlib
+- Statsmodels
+- Pandas, NumPy
+- Custom modules: `data_loader`, `model`, `utils`, `plots`
+
+Usage:
+    Run the script to start the dashboard locally. Use the web interface to select parameters and view results.
+
+Example:
+    >>> python crypto_forecasting_dashboard.py
+    * Running on http://127.0.0.1:8050/ (Press CTRL+C to quit)
+
+Key Components:
+1. **Controls Section:**
+   - Select error distribution for GARCH model: Normal, Student's t, or Skewed t.
+   - Choose ARIMA and GARCH parameters (manual or auto-tuned).
+   - Set forecast mode: backtest or future.
+   - Pick cryptocurrency and date range.
+
+2. **Plots:**
+   - Price plot with forecasts
+   - Histogram of returns
+   - Q-Q plot for residual distribution
+   - ACF and PACF plots
+   - Residual diagnostics
+
+3. **Diagnostics and Tables:**
+   - ADF Test results for stationarity.
+   - Residual diagnostics (Ljung-Box Q-test, ARCH test).
+   - Descriptive statistics and model metrics (AIC, BIC, MAE, RMSE, MAPE).
+
+Functions:
+1. `toggle_inputs(mode)`: Enables or disables manual parameter inputs based on selected mode.
+2. `update_all_components`: Main callback to handle user interactions, fetch data, fit models, generate diagnostics, and update outputs.
+
+Deployment:
+- Use `app.run_server()` for local testing or deploy to platforms like Heroku or AWS.
+
+Example Workflow:
+1. Select Bitcoin as the cryptocurrency.
+2. Choose a date range (e.g., 2021-01-01 to today).
+3. Set ARIMA(1, 1, 1) and GARCH(1, 1) parameters (manual mode).
+4. Run the analysis to generate forecasts and diagnostic plots.
+
+Output:
+- Interactive visualizations (price, diagnostics).
+- Forecasted prices in tabular format.
+- Diagnostics summary in plain text.
+
+"""
+
 import dash
 from dash import dcc, html, Input, Output, State, callback
 import plotly.graph_objs as go
