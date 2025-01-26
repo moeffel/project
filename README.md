@@ -14,7 +14,6 @@ The model should automatically adjust to the user's selection of cryptocurrencie
 # 3. Functional Requirements
 ## 3.1 User Interface (UI)
 
-### Interactive Web UI (Dash)
 - Cryptocurrency Selection: Drop-down to select multiple cryptocurrencies (e.g., BTC, ETH, DOGE, SOL).
 - Date Range Selection: Input for time frame (e.g., 1 year, 2 years, etc.).
 - ARIMA-GARCH Parameter Customization: Allow users to enter ARIMA (p, d, q) and GARCH (p, q) values or select "Auto" to auto-tune parameters.
