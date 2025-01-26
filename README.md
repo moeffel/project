@@ -61,7 +61,7 @@ The model should automatically adjust to the user's selection of cryptocurrencie
 
 ## 3.6 Forecasting & Performance Evaluation
 
--Forecasting:
+- Forecasting:
     Generate price forecasts for the selected period (e.g., 30 days).
     Plot Actual vs. Forecasted Prices.
 
@@ -83,11 +83,11 @@ The model should automatically adjust to the user's selection of cryptocurrencie
 # 4. Non-Functional Requirements
 
 - Category Requirement
-    Usability Easy-to-use web interface (Dash)
-    Maintainability Clean, modularized, and well-documented Python code.
-    Extensibility New coins can be added by adding a ticker.
-    Performance Fast processing for min 2 years of daily data.
-    Reproducibility Use a random seed for reproducible results.
+- Usability Easy-to-use web interface (Dash)
+- Maintainability Clean, modularized, and well-documented Python code.
+- Extensibility New coins can be added by adding a ticker.
+- Performance Fast processing for min 2 years of daily data.
+- Reproducibility Use a random seed for reproducible results.
 
 # 5. Technical Specifications
 
