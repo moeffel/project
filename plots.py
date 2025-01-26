@@ -14,8 +14,6 @@ This module provides functions to generate various Plotly charts and HTML tables
 
 Each function includes comprehensive docstrings, doctests where applicable, and comments to ensure clarity and ease of understanding.
 
-Author: OpenAI ChatGPT
-Date: 2025-01-26
 """
 
 import plotly.graph_objs as go
